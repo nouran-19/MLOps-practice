@@ -1,0 +1,62 @@
+experiment_name: titanic_alt
+
+data:
+  competition_name: titanic
+  raw_data_dir: data/raw/titanic
+  train_file: train.csv
+  test_file: test.csv
+  target_column: Survived
+  drop_columns:
+    - PassengerId
+
+preprocessing:
+  numeric_features:
+    - Age
+    - Fare
+    - SibSp
+    - Parch
+    - FamilySize
+    - IsAlone
+    - HasCabin
+  categorical_features:
+    - Pclass
+    - Sex
+    - Embarked
+    - Title
+    - Deck
+    - TicketPrefix
+
+training:
+  test_size: 0.25
+  random_state: 123
+  cv_splits: 5
+  scoring:
+    - accuracy
+    - f1
+    - precision
+    - recall
+    - roc_auc
+  selection_metric: roc_auc
+
+models:
+  logistic_regression:
+    _target_: sklearn.linear_model.LogisticRegression
+    class_weight: balanced
+    max_iter: 3000
+    random_state: ${pipeline.training.random_state}
+    solver: liblinear
+
+  random_forest:
+    _target_: sklearn.ensemble.RandomForestClassifier
+    class_weight: balanced
+    n_estimators: 500
+    min_samples_leaf: 1
+    max_depth: null
+    n_jobs: -1
+    random_state: ${pipeline.training.random_state}
+
+artifacts:
+  model_dir: models/titanic/${pipeline.experiment_name}
+  model_file: titanic_pipeline.pkl
+  report_dir: reports/titanic/${pipeline.experiment_name}
+  report_file: training_report.json

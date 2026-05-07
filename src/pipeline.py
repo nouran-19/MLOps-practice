@@ -1,4 +1,4 @@
-"""Titanic training pipeline."""
+"""Titanic training pipeline with Hydra-configurable settings."""
 
 from __future__ import annotations
 
@@ -7,35 +7,18 @@ from pathlib import Path
 from typing import Any
 import zipfile
 
+from hydra.utils import instantiate
 import joblib
 from kaggle.api.kaggle_api_extended import KaggleApi
+from omegaconf import DictConfig
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    accuracy_score,
-    f1_score,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-
-RANDOM_STATE = 42
-TEST_SIZE = 0.2
-CV_SPLITS = 5
-COMPETITION_NAME = "titanic"
-RAW_DATA_DIR = Path("data") / "raw" / "titanic"
-MODEL_DIR = Path("models") / "titanic"
-REPORT_DIR = Path("reports") / "titanic"
-
-NUMERIC_FEATURES = ["Age", "Fare", "SibSp", "Parch", "FamilySize", "IsAlone", "HasCabin"]
-CATEGORICAL_FEATURES = ["Pclass", "Sex", "Embarked", "Title", "Deck", "TicketPrefix"]
 
 TITLE_REPLACEMENTS = {
     "Mlle": "Miss",
@@ -86,7 +69,7 @@ class TitanicFeatureEngineer(BaseEstimator, TransformerMixin):
         return prefixes.replace("", "NONE")
 
 
-def _build_preprocessor() -> ColumnTransformer:
+def _build_preprocessor(cfg: DictConfig) -> ColumnTransformer:
     numeric_transformer = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
@@ -101,126 +84,124 @@ def _build_preprocessor() -> ColumnTransformer:
     )
     return ColumnTransformer(
         transformers=[
-            ("numeric", numeric_transformer, NUMERIC_FEATURES),
-            ("categorical", categorical_transformer, CATEGORICAL_FEATURES),
+            ("numeric", numeric_transformer, list(cfg.preprocessing.numeric_features)),
+            ("categorical", categorical_transformer, list(cfg.preprocessing.categorical_features)),
         ]
     )
 
 
-def _build_model_candidates() -> dict[str, Any]:
-    return {
-        "logistic_regression": LogisticRegression(
-            class_weight="balanced",
-            max_iter=2_000,
-            random_state=RANDOM_STATE,
-            solver="liblinear",
-        ),
-        "random_forest": RandomForestClassifier(
-            class_weight="balanced",
-            max_depth=None,
-            min_samples_leaf=2,
-            n_estimators=300,
-            n_jobs=-1,
-            random_state=RANDOM_STATE,
-        ),
-    }
+def _build_model_candidates(cfg: DictConfig) -> dict[str, Any]:
+    return {model_name: instantiate(model_cfg) for model_name, model_cfg in cfg.models.items()}
 
 
-def _build_pipeline(estimator: Any) -> Pipeline:
+def _build_pipeline(cfg: DictConfig, estimator: Any) -> Pipeline:
     return Pipeline(
         steps=[
             ("feature_engineering", TitanicFeatureEngineer()),
-            ("preprocessing", _build_preprocessor()),
+            ("preprocessing", _build_preprocessor(cfg)),
             ("model", estimator),
         ]
     )
 
 
-def download_titanic_competition_data(logger) -> Path:
+def download_titanic_competition_data(cfg: DictConfig, logger) -> None:
     """Download and extract the Titanic competition data from Kaggle."""
 
-    RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
-    train_file = RAW_DATA_DIR / "train.csv"
-    test_file = RAW_DATA_DIR / "test.csv"
-    if train_file.exists() and test_file.exists():
+    raw_data_dir = Path(cfg.data.raw_data_dir)
+    train_file = cfg.data.train_file
+    test_file = cfg.data.test_file
+    competition_name = cfg.data.competition_name
+
+    raw_data_dir.mkdir(parents=True, exist_ok=True)
+    train_path = raw_data_dir / train_file
+    test_path = raw_data_dir / test_file
+
+    if train_path.exists() and test_path.exists():
         logger.info("Titanic data already available locally")
-        return RAW_DATA_DIR
+        return
 
     logger.info("Downloading Titanic competition data from Kaggle")
     api = KaggleApi()
     api.authenticate()
-    api.competition_download_files(COMPETITION_NAME, path=str(RAW_DATA_DIR), quiet=False)
+    api.competition_download_files(competition_name, path=str(raw_data_dir), quiet=False)
 
-    archive_path = RAW_DATA_DIR / f"{COMPETITION_NAME}.zip"
+    archive_path = raw_data_dir / f"{competition_name}.zip"
     if archive_path.exists():
         with zipfile.ZipFile(archive_path, "r") as archive:
-            archive.extractall(RAW_DATA_DIR)
+            archive.extractall(raw_data_dir)
         archive_path.unlink()
 
-    if not train_file.exists():
+    if not train_path.exists():
         raise FileNotFoundError(
-            "Titanic train.csv was not found after download. Check Kaggle authentication and"
-            " competition access."
+            "Titanic train.csv was not found after download. Check Kaggle authentication and "
+            "competition access."
         )
 
     logger.info("Titanic competition data is ready")
-    return RAW_DATA_DIR
 
 
-def load_titanic_data() -> tuple[pd.DataFrame, pd.Series]:
-    data = pd.read_csv(RAW_DATA_DIR / "train.csv")
-    if "Survived" not in data.columns:
-        raise ValueError("Titanic training data must contain a Survived target column")
+def load_titanic_data(cfg: DictConfig) -> tuple[pd.DataFrame, pd.Series]:
+    train_data_path = Path(cfg.data.raw_data_dir) / cfg.data.train_file
+    data = pd.read_csv(train_data_path)
+    target_column = cfg.data.target_column
+    drop_columns = list(cfg.data.drop_columns)
 
-    y = data["Survived"]
-    X = data.drop(columns=["Survived"])
-    if "PassengerId" in X.columns:
-        X = X.drop(columns=["PassengerId"])
+    if target_column not in data.columns:
+        raise ValueError(f"Titanic training data must contain target column: {target_column}")
 
+    y = data[target_column]
+    X = data.drop(columns=[target_column])
+    present_drop_columns = [column for column in drop_columns if column in X.columns]
+    if present_drop_columns:
+        X = X.drop(columns=present_drop_columns)
     return X, y
 
 
 def evaluate_candidates(
+    cfg: DictConfig,
     X_train: pd.DataFrame,
     y_train: pd.Series,
     logger,
 ) -> tuple[str, Pipeline, dict[str, dict[str, float]]]:
-    cv = StratifiedKFold(n_splits=CV_SPLITS, shuffle=True, random_state=RANDOM_STATE)
-    candidates = _build_model_candidates()
+    cv = StratifiedKFold(
+        n_splits=cfg.training.cv_splits,
+        shuffle=True,
+        random_state=cfg.training.random_state,
+    )
+    scoring_metrics = list(cfg.training.scoring)
+    selection_metric = cfg.training.selection_metric
+    scoring = {metric: metric for metric in scoring_metrics}
+    if selection_metric not in scoring:
+        raise ValueError(
+            f"selection_metric={selection_metric} must be included in training.scoring"
+        )
+
+    candidates = _build_model_candidates(cfg)
     scores: dict[str, dict[str, float]] = {}
     best_name = ""
     best_score = float("-inf")
     best_pipeline: Pipeline | None = None
 
     for model_name, estimator in candidates.items():
-        pipeline = _build_pipeline(estimator)
+        pipeline = _build_pipeline(cfg, estimator)
         cv_result = cross_validate(
             pipeline,
             X_train,
             y_train,
             cv=cv,
             n_jobs=-1,
-            scoring={
-                "accuracy": "accuracy",
-                "f1": "f1",
-                "precision": "precision",
-                "recall": "recall",
-                "roc_auc": "roc_auc",
-            },
+            scoring=scoring,
         )
         model_scores = {
-            metric: float(cv_result[f"test_{metric}"].mean())
-            for metric in ("accuracy", "f1", "precision", "recall", "roc_auc")
+            metric: float(cv_result[f"test_{metric}"].mean()) for metric in scoring_metrics
         }
         scores[model_name] = model_scores
-        logger.info(
-            f"{model_name} cross-validation scores: "
-            f"accuracy={model_scores['accuracy']:.4f}, f1={model_scores['f1']:.4f}, "
-            f"precision={model_scores['precision']:.4f}, recall={model_scores['recall']:.4f}, "
-            f"roc_auc={model_scores['roc_auc']:.4f}"
+        score_message = ", ".join(
+            f"{metric}={model_scores[metric]:.4f}" for metric in scoring_metrics
         )
-        if model_scores["accuracy"] > best_score:
-            best_score = model_scores["accuracy"]
+        logger.info(f"{model_name} cross-validation scores: {score_message}")
+        if model_scores[selection_metric] > best_score:
+            best_score = model_scores[selection_metric]
             best_name = model_name
             best_pipeline = pipeline
 
@@ -231,19 +212,19 @@ def evaluate_candidates(
     return best_name, best_pipeline, scores
 
 
-def train_titanic_pipeline(logger) -> None:
-    download_titanic_competition_data(logger)
-    X, y = load_titanic_data()
+def train_titanic_pipeline(cfg: DictConfig, logger) -> None:
+    download_titanic_competition_data(cfg, logger)
+    X, y = load_titanic_data(cfg)
 
     X_train, X_valid, y_train, y_valid = train_test_split(
         X,
         y,
-        test_size=TEST_SIZE,
-        random_state=RANDOM_STATE,
+        test_size=cfg.training.test_size,
+        random_state=cfg.training.random_state,
         stratify=y,
     )
 
-    best_name, best_pipeline, cv_scores = evaluate_candidates(X_train, y_train, logger)
+    best_name, best_pipeline, cv_scores = evaluate_candidates(cfg, X_train, y_train, logger)
 
     logger.info("Fitting the best pipeline on the training split")
     best_pipeline.fit(X_train, y_train)
@@ -258,15 +239,18 @@ def train_titanic_pipeline(logger) -> None:
         "roc_auc": float(roc_auc_score(y_valid, valid_probabilities)),
     }
 
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    model_dir = Path(cfg.artifacts.model_dir)
+    report_dir = Path(cfg.artifacts.report_dir)
+    model_path = model_dir / cfg.artifacts.model_file
+    report_path = report_dir / cfg.artifacts.report_file
 
-    model_path = MODEL_DIR / "titanic_pipeline.pkl"
-    report_path = REPORT_DIR / "training_report.json"
-
+    model_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(best_pipeline, model_path)
+
     report = {
-        "dataset": "kaggle/titanic",
+        "dataset": f"kaggle/{cfg.data.competition_name}",
+        "config_name": cfg.experiment_name,
         "best_model": best_name,
         "cross_validation": cv_scores,
         "validation_metrics": metrics,
@@ -277,14 +261,3 @@ def train_titanic_pipeline(logger) -> None:
 
     logger.info(f"Saved trained pipeline to {model_path}")
     logger.info(f"Saved training report to {report_path}")
-
-
-def main() -> None:
-    from src.logger import ExecutorLogger
-
-    logger = ExecutorLogger("training")
-    train_titanic_pipeline(logger)
-
-
-if __name__ == "__main__":
-    main()
