@@ -80,6 +80,16 @@ Why this matters:
 - If code/data/config changes, DVC can rerun only what is needed.
 - `dvc.lock` captures exact reproducible state.
 
+### Example Stage Chain
+
+For learning, this repo now also shows how one DVC stage can feed the next stage.
+
+- `train_titanic` creates `models/titanic/titanic_pipeline.pkl`
+- `score_titanic` uses that `.pkl` file as an input dependency
+- If the model changes, DVC reruns only the downstream scoring stage
+
+This is the key idea behind multi-stage ML pipelines: each file can be either an output of one stage or an input to another stage.
+
 ## DagsHub Connection
 
 This repo uses DagsHub as DVC remote storage.
