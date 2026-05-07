@@ -206,8 +206,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# mine
-notion/*
-data/raw/titanic/gender_submission.csv
-data/raw/titanic/test.csv
-data/raw/titanic/train.csv
+# DVC - Data Version Control
+# Actual data/model files are stored in DVC remote (DagsHub)
+# Only .dvc pointer files are committed to Git
+/data/raw/titanic/*.csv
+/models/titanic/*.pkl
+/reports/titanic/*.json

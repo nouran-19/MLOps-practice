@@ -1,0 +1,17 @@
+stages:
+  train_titanic:
+    cmd: .\.venv\Scripts\python.exe trainer.py
+    deps:
+      - src/pipeline.py
+      - src/logger.py
+      - trainer.py
+      - conf/config.yaml
+      - conf/pipeline/titanic_baseline.yaml
+      - conf/pipeline/titanic_alt.yaml
+      - data/raw/titanic/train.csv
+      - data/raw/titanic/test.csv
+    metrics:
+      - reports/titanic/training_report.json:
+          cache: false
+    outs:
+      - models/titanic/titanic_pipeline.pkl
