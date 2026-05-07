@@ -208,3 +208,6 @@ __marimo__/
 
 # mine
 notion/*
+data/raw/titanic/gender_submission.csv
+data/raw/titanic/test.csv
+data/raw/titanic/train.csv

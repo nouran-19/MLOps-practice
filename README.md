@@ -4,16 +4,17 @@
     <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
 </a>
 
-Complete MLOps Pipeline for ML Practitioners - An educational project for the ITI MLOps Course.
+Complete MLOps Pipeline for ML Practitioners - an educational project that now trains a Titanic classifier end to end.
 
 ## Overview
 
-This project demonstrates a complete end-to-end machine learning pipeline. It includes data download from Kaggle, data processing with train/test splits, hyperparameter optimization with Hyperopt, and model evaluation with skore.
+This project demonstrates a complete end-to-end machine learning pipeline. It includes Titanic competition data download from Kaggle, feature engineering, preprocessing with scikit-learn transformers, model selection across multiple classifiers, and model/report saving.
 
 ## Prerequisites
 
 - Python 3.11+
 - uv (for dependency management)
+- Kaggle API credentials configured at `~/.kaggle/kaggle.json` or through environment variables
 
 Install dependencies:
 ```bash
@@ -64,12 +65,7 @@ ITI-MLOps/
 
 ### 1. Data Preparation
 
-The pipeline automatically downloads the Iris dataset from Kaggle. To use a different dataset:
-
-```bash
-cp your_data.csv data/raw/your_dataset.csv
-```
-Then update the dataset name in `trainer.py`.
+The pipeline automatically downloads the Titanic competition files from Kaggle. Make sure your Kaggle account has accepted the competition rules and that your API token is configured.
 
 ### 2. Run the Pipeline
 
@@ -78,10 +74,10 @@ python trainer.py
 ```
 
 This will:
-1. **Download data** - Fetch Iris dataset from Kaggle
-2. **Process data** - Split data into train/test sets
-3. **Train model** - Run hyperparameter optimization with Hyperopt
-4. **Evaluate** - Output model performance metrics
+1. **Download data** - Fetch Titanic competition files from Kaggle
+2. **Engineer features** - Build Titanic-specific features inside a scikit-learn pipeline
+3. **Train models** - Compare at least two scikit-learn classifiers and select the best one
+4. **Evaluate and save** - Persist the trained pipeline and a JSON training report
 
 ### 3. View Logs
 
@@ -91,26 +87,23 @@ Logs are stored in `logs/` directory with timestamps.
 
 The pipeline is orchestrated by `trainer.py` and consists of four stages:
 
-### 1. Data Download (`src/training/download_data.py`)
-- Downloads Iris dataset from Kaggle using `kagglehub`
-- Saves raw data to `data/raw/Iris.csv`
+### 1. Data Download (`src/pipeline.py`)
+- Downloads the Titanic competition archive using the Kaggle API
+- Extracts the raw CSV files into `data/raw/titanic/`
 
-### 2. Data Processing (`src/training/process_data.py`)
-- Loads raw CSV data
-- Splits data into train/test (85%/15%) with stratification
-- Saves processed data as Parquet files in `data/processed/`
+### 2. Feature Engineering and Preprocessing (`src/pipeline.py`)
+- Adds Titanic-specific features like family size, cabin deck, title, and ticket prefix
+- Uses a `ColumnTransformer` with numeric imputation/scaling and categorical one-hot encoding
 
-### 3. Model Training (`src/training/train.py`)
-- Reads Parquet files and extracts features/target
-- Creates label encoder/decoder for target variable
-- Uses Hyperopt for Bayesian hyperparameter optimization
-- Trains final model with optimal parameters
-- Saves model to `models/fake/final_model.pkl`
+### 3. Model Training (`src/pipeline.py`)
+- Compares logistic regression and random forest pipelines with cross-validation
+- Selects the best model based on validation accuracy
+- Fits the final pipeline on the training split
+- Saves the trained pipeline to `models/titanic/titanic_pipeline.pkl`
 
-### 4. Model Evaluation (`src/training/evaluate.py`)
-- Loads trained model and test data
-- Computes metrics (accuracy, precision, recall)
-- Saves evaluation report as JSON in `reports/fake/evaluation_report.json`
+### 4. Model Evaluation and Reporting (`src/pipeline.py`)
+- Evaluates the selected model on a holdout split
+- Saves metrics and cross-validation results to `reports/titanic/training_report.json`
 
 ## Using W&B for Experiment Tracking
 

@@ -1,0 +1,28 @@
+{
+    "dataset": "kaggle/titanic",
+    "best_model": "random_forest",
+    "cross_validation": {
+        "logistic_regression": {
+            "accuracy": 0.8174825174825175,
+            "f1": 0.7716626302358275,
+            "precision": 0.7491402497852484,
+            "recall": 0.7987205387205388,
+            "roc_auc": 0.8715345592814245
+        },
+        "random_forest": {
+            "accuracy": 0.8258938244853737,
+            "f1": 0.7738036359088991,
+            "precision": 0.7768848158784261,
+            "recall": 0.7728619528619529,
+            "roc_auc": 0.8842134643192636
+        }
+    },
+    "validation_metrics": {
+        "accuracy": 0.7988826815642458,
+        "precision": 0.7323943661971831,
+        "recall": 0.7536231884057971,
+        "f1": 0.7428571428571429,
+        "roc_auc": 0.8509222661396574
+    },
+    "artifact_path": "models\\titanic\\titanic_pipeline.pkl"
+}

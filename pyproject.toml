@@ -11,6 +11,7 @@ dependencies = [
     "dvc>=3.33.0,<4",
     "dvc-s3>=3.2.0,<4",
     "hydra-core>=1.1.0,<2",
+    "kaggle>=1.7.4.5,<2",
     "hyperopt>=0.2.5,<1",
     "loguru>=0.7.2,<1",
     "numpy>=1.26.4,<2",
@@ -56,4 +57,12 @@ extend-select = ["I"]
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
 force-sort-within-sections = true
+
+[tool.black]
+line-length = 99
+target-version = ["py311"]
+
+[tool.isort]
+profile = "black"
+line_length = 99
 
