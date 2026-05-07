@@ -90,6 +90,24 @@ For learning, this repo now also shows how one DVC stage can feed the next stage
 
 This is the key idea behind multi-stage ML pipelines: each file can be either an output of one stage or an input to another stage.
 
+Pipeline flow:
+
+```text
+raw Titanic CSVs
+    |
+    v
+train_titanic stage
+    |
+    v
+models/titanic/titanic_pipeline.pkl
+    |
+    v
+score_titanic stage
+    |
+    v
+downstream report + predictions
+```
+
 ## DagsHub Connection
 
 This repo uses DagsHub as DVC remote storage.
