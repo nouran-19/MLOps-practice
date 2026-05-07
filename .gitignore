@@ -212,3 +212,4 @@ __marimo__/
 /data/raw/titanic/*.csv
 /models/titanic/*.pkl
 /reports/titanic/*.json
+/outputs/

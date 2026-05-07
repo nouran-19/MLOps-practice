@@ -1,4 +1,7 @@
 [core]
-    remote = storage
+    remote = origin
 ['remote "storage"']
     url = https://dagshub.com/nouran-19/MLOps-practice.dvc
+['remote "origin"']
+    url = s3://dvc
+    endpointurl = https://dagshub.com/nouran-19/MLOps-practice.s3

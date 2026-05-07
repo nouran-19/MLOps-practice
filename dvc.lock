@@ -1,0 +1,46 @@
+schema: '2.0'
+stages:
+  train_titanic:
+    cmd: .\.venv\Scripts\python.exe trainer.py
+    deps:
+    - path: conf/config.yaml
+      hash: md5
+      md5: 7bf14d854e4652df03e66195d48b31db
+      size: 55
+    - path: conf/pipeline/titanic_alt.yaml
+      hash: md5
+      md5: 0a351010438bafb1ffa2cd1c37a08779
+      size: 1301
+    - path: conf/pipeline/titanic_baseline.yaml
+      hash: md5
+      md5: 93753f2deb6f7f895afbd3dadfad6a21
+      size: 1249
+    - path: data/raw/titanic/test.csv
+      hash: md5
+      md5: 7533b82eae4b582610cbd68aa636b017
+      size: 28629
+    - path: data/raw/titanic/train.csv
+      hash: md5
+      md5: 2309cc5f04782ed9bb6016d9f4e381cf
+      size: 61194
+    - path: src/logger.py
+      hash: md5
+      md5: cbfe9fae9c95c423a058d179e5c77254
+      size: 4010
+    - path: src/pipeline.py
+      hash: md5
+      md5: 0010fa22c1fc19ee978e6452f2745c12
+      size: 9549
+    - path: trainer.py
+      hash: md5
+      md5: 68b8f6cad9522f36a3c1a2b78032b59e
+      size: 531
+    outs:
+    - path: models/titanic/titanic_pipeline.pkl
+      hash: md5
+      md5: 540f52db63b5f96fb7276cf2363a4d4c
+      size: 3702171
+    - path: reports/titanic/training_report.json
+      hash: md5
+      md5: ba6a1f68a4b03a54cee2da6440bf260c
+      size: 961
