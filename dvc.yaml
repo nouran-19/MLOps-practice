@@ -15,3 +15,16 @@ stages:
           cache: false
     outs:
       - models/titanic/titanic_pipeline.pkl
+
+  score_titanic:
+    cmd: .\.venv\Scripts\python.exe src/training/evaluate.py --model-path models/titanic/titanic_pipeline.pkl --data-path data/raw/titanic/train.csv --predictions-path reports/titanic/downstream_predictions.csv --report-path reports/titanic/downstream_report.json --target-column Survived --drop-columns PassengerId
+    deps:
+      - src/training/evaluate.py
+      - src/logger.py
+      - models/titanic/titanic_pipeline.pkl
+      - data/raw/titanic/train.csv
+    metrics:
+      - reports/titanic/downstream_report.json:
+          cache: false
+    outs:
+      - reports/titanic/downstream_predictions.csv

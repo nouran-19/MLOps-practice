@@ -44,3 +44,34 @@ stages:
       hash: md5
       md5: ba6a1f68a4b03a54cee2da6440bf260c
       size: 961
+  score_titanic:
+    cmd: .\.venv\Scripts\python.exe src/training/evaluate.py --model-path models/titanic/titanic_pipeline.pkl
+      --data-path data/raw/titanic/train.csv --predictions-path reports/titanic/downstream_predictions.csv
+      --report-path reports/titanic/downstream_report.json --target-column Survived
+      --drop-columns PassengerId
+    deps:
+    - path: data/raw/titanic/train.csv
+      hash: md5
+      md5: 2309cc5f04782ed9bb6016d9f4e381cf
+      size: 61194
+    - path: models/titanic/titanic_pipeline.pkl
+      hash: md5
+      md5: 540f52db63b5f96fb7276cf2363a4d4c
+      size: 3702171
+    - path: src/logger.py
+      hash: md5
+      md5: cbfe9fae9c95c423a058d179e5c77254
+      size: 4010
+    - path: src/training/evaluate.py
+      hash: md5
+      md5: d99fa99250b721a27119151aa96e8605
+      size: 5136
+    outs:
+    - path: reports/titanic/downstream_predictions.csv
+      hash: md5
+      md5: 8c4275183a6a5f717cf0545ae47161c9
+      size: 64687
+    - path: reports/titanic/downstream_report.json
+      hash: md5
+      md5: e8339aba65aeb9a6d647f1eb165121b8
+      size: 388
