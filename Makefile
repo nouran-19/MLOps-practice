@@ -57,8 +57,15 @@ create_environment:
 # PROJECT RULES                                                                 #
 #################################################################################
 
+## Run the DVC training pipeline (also logs to MLflow on DagsHub)
+.PHONY: train
+train:
+	dvc repro
 
-
+## Open the DagsHub MLflow experiment tracking UI in the browser
+.PHONY: mlflow-ui
+mlflow-ui:
+	@echo "Open: https://dagshub.com/nouran-19/MLOps-practice.mlflow"
 #################################################################################
 # Self Documenting Commands                                                     #
 #################################################################################

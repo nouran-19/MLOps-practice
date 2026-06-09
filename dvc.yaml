@@ -3,6 +3,7 @@ stages:
     cmd: .\.venv\Scripts\python.exe trainer.py
     deps:
       - src/pipeline.py
+      - src/mlflow_utils.py
       - src/logger.py
       - trainer.py
       - conf/config.yaml

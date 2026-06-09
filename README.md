@@ -1,237 +1,313 @@
-# MLOps Pipeline Project - Titanic Training with DVC + DagsHub
+# MLOps Pipeline — Experiment Tracking with MLflow + DagsHub
 
 <a target="_blank" href="https://cookiecutter-data-science.drivendaily.org/">
     <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
 </a>
 
-This project trains a Titanic classifier and versions data, models, and reports with DVC.
-The remote storage is connected to DagsHub so anyone can clone the repo and pull the same artifacts.
+This project trains a Titanic survival classifier and tracks every experiment with **MLflow**, hosted on **DagsHub**.
+Each training run automatically logs hyperparameters, cross-validation scores, validation metrics, and model artifacts — making runs comparable, searchable, and fully reproducible from the dashboard alone.
 
-## What This Project Solves
+Data and model binaries are still versioned with **DVC** (remote on DagsHub), but the headline workflow is now **experiment tracking**.
 
-In ML projects, code is not enough.
-You also need to version:
-- training data
-- trained model files
-- evaluation reports
+## Architecture Overview
 
-Git handles code well, but not large artifacts.
-DVC handles large artifacts and keeps them reproducible.
-DagsHub provides the remote storage and ML-friendly collaboration layer.
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                      Your Machine                           │
+│                                                             │
+│  Hydra Config ──► trainer.py ──► pipeline.py                │
+│       │                              │                      │
+│       │       ┌──────────────────────┤                      │
+│       │       │                      │                      │
+│       ▼       ▼                      ▼                      │
+│   mlflow_utils.py             DVC (dvc repro)               │
+│       │                              │                      │
+└───────┼──────────────────────────────┼──────────────────────┘
+        │                              │
+        ▼                              ▼
+  ┌───────────────────────────────────────────┐
+  │              DagsHub (Remote)             │
+  │                                           │
+  │  MLflow Tracking Server   DVC S3 Remote   │
+  │  (params, metrics, tags)  (data, models)  │
+  └───────────────────────────────────────────┘
+```
 
-## Quick Concepts (Beginner Friendly)
+**One `dvc repro` triggers everything**: the training pipeline runs, MLflow logs the experiment to DagsHub, and DVC snapshots the binary artifacts.
 
-- Git: versions code files.
-- DVC: versions data/model artifacts and tracks pipeline outputs.
-- DagsHub: remote backend where DVC files are stored and shared.
+## Opinionated Modifications Explained
 
-Typical flow:
-1. Run pipeline locally.
-2. DVC tracks outputs and saves hashes in Git.
-3. DVC pushes real artifact files to DagsHub remote.
-4. Another machine clones repo and runs `dvc pull` to get exact artifacts.
+Every integration choice below is deliberate. This section explains **why**, not just **what**.
+
+### 1. `dagshub.init()` over manual MLflow server setup
+
+```python
+# src/mlflow_utils.py
+dagshub.init(repo_owner="nouran-19", repo_name="MLOps-practice", mlflow=True)
+```
+
+**Why**: DagsHub gives you a free hosted MLflow tracking server — zero infrastructure, no Docker, no database.
+Calling `dagshub.init()` auto-configures `MLFLOW_TRACKING_URI` and injects auth from `DAGSHUB_USER_TOKEN`.
+There is nothing else to set up.
+
+**Trade-off**: You're coupled to DagsHub as the backend. If you need a self-hosted MLflow server later, swap the `init_dagshub_mlflow()` function in `mlflow_utils.py` — no other code changes required.
+
+### 2. One MLflow run per pipeline execution
+
+```python
+# src/pipeline.py
+with mlflow.start_run(run_name=cfg.experiment_name):
+    # ... entire train → evaluate → save cycle
+```
+
+**Why**: The full train-evaluate-save cycle is one atomic unit of work. Logging it as one run means the DagsHub UI shows a single row per experiment config.
+Switch from `titanic_baseline` to `titanic_alt` via Hydra, and each becomes a separate, directly comparable run.
+
+**Trade-off**: If you need per-model-candidate child runs (e.g., logging Random Forest and Logistic Regression as sub-runs), MLflow supports nested runs. The current design keeps things flat and simple.
+
+### 3. Centralised `src/mlflow_utils.py`
+
+**Why**: All `mlflow.log_*()` calls live in one module. The training pipeline (`pipeline.py`) calls high-level helpers like `log_hydra_params(cfg)` instead of scattering tracking code everywhere.
+
+Benefits:
+- **Swap trackers**: Replace this one file to switch from MLflow to Weights & Biases, Neptune, etc.
+- **Test in isolation**: Mock `mlflow_utils` in tests without touching training logic.
+- **Read the pipeline**: `pipeline.py` stays focused on ML, not on serialising metrics to an API.
+
+### 4. Hydra params are flattened and logged
+
+```python
+# Flattens nested Hydra config to:
+# training.test_size = 0.2
+# models.random_forest.n_estimators = 300
+# ...
+log_hydra_params(cfg)
+```
+
+**Why**: Every single hyperparameter is captured in MLflow. You can reproduce any historical run from the dashboard alone — no need to dig through Git history for the YAML file that was active at the time.
+
+### 5. Model artifact logged to both DVC and MLflow
+
+**Why**: Two different purposes:
+- **DVC**: Heavyweight binary versioning with content-addressable storage. The `.pkl` file is pushed to the DagsHub S3 remote.
+- **MLflow**: Lightweight run-attached snapshot for traceability. Click a run in the UI → download the exact model that produced those metrics.
+
+Neither replaces the other. DVC is the source of truth for artifact versions; MLflow links runs to artifacts.
 
 ## Project Structure
 
 ```
 MLOps-practice2/
 ├── .dvc/                             # DVC config and internal metadata
-├── conf/                             # Training configuration files
+├── conf/                             # Hydra configuration files
+│   ├── config.yaml                   # Default config (selects pipeline)
+│   └── pipeline/
+│       ├── titanic_baseline.yaml     # Baseline experiment config
+│       └── titanic_alt.yaml          # Alternative experiment config
 ├── data/raw/titanic/                 # Titanic CSV files (tracked by DVC)
-│   ├── train.csv.dvc
-│   ├── test.csv.dvc
-│   └── gender_submission.csv.dvc
 ├── models/titanic/                   # Trained pipeline artifact (DVC output)
 ├── reports/titanic/                  # Training report artifact (DVC output)
-├── src/                              # Pipeline source code
-├── trainer.py                        # Training entry point
+├── src/
+│   ├── mlflow_utils.py               # MLflow + DagsHub tracking helpers
+│   ├── pipeline.py                   # Training pipeline (instrumented)
+│   ├── logger.py                     # Loguru-based logger
+│   └── training/                     # Evaluation & scoring modules
+├── trainer.py                        # Entry point (Hydra + dotenv)
 ├── dvc.yaml                          # DVC pipeline definition
 ├── dvc.lock                          # Locked stage dependency/output hashes
+├── Makefile                          # Convenience targets (train, mlflow-ui)
 └── pyproject.toml                    # Dependencies and project config
 ```
 
 ## Prerequisites
 
 - Python 3.11+
-- uv
+- [uv](https://docs.astral.sh/uv/) package manager
 - Kaggle credentials for Titanic data access
-- DagsHub account and token
+- DagsHub account and [user token](https://dagshub.com/user/settings/tokens)
 
-Install dependencies:
+## Quick Start
 
-```bash
-uv sync
-```
-
-## DVC Pipeline in This Repo
-
-The pipeline stage is defined in `dvc.yaml`.
-It runs training and tracks outputs.
-
-Main stage:
-- stage name: `train_titanic`
-- command: run trainer script using local virtual environment
-- dependencies: training code, config files, and raw Titanic CSV files
-- outputs: model file
-- metrics: training report JSON
-
-Why this matters:
-- If dependencies do not change, DVC can skip reruns.
-- If code/data/config changes, DVC can rerun only what is needed.
-- `dvc.lock` captures exact reproducible state.
-
-### Example Stage Chain
-
-For learning, this repo now also shows how one DVC stage can feed the next stage.
-
-- `train_titanic` creates `models/titanic/titanic_pipeline.pkl`
-- `score_titanic` uses that `.pkl` file as an input dependency
-- If the model changes, DVC reruns only the downstream scoring stage
-
-This is the key idea behind multi-stage ML pipelines: each file can be either an output of one stage or an input to another stage.
-
-Pipeline flow:
-
-```text
-raw Titanic CSVs
-    |
-    v
-train_titanic stage
-    |
-    v
-models/titanic/titanic_pipeline.pkl
-    |
-    v
-score_titanic stage
-    |
-    v
-downstream report + predictions
-```
-
-## DagsHub Connection
-
-This repo uses DagsHub as DVC remote storage.
-
-Configured remote (in `.dvc/config`):
-- default remote points to DagsHub S3 endpoint
-- credentials are stored locally in `.dvc/config.local` (not committed)
-
-Important:
-- Never commit `.dvc/config.local`.
-- If token is exposed, rotate it in DagsHub immediately.
-
-## First-Time Setup (One Machine)
-
-1. Clone repo.
-2. Install dependencies.
-3. Configure DVC auth for DagsHub.
-4. Pull artifacts from remote.
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/nouran-19/MLOps-practice.git
 cd MLOps-practice2
 uv sync
+```
 
-# if needed, set remote credentials locally
-# dvc remote modify --local origin access_key_id <dagshub_token>
-# dvc remote modify --local origin secret_access_key <dagshub_token>
+### 2. Configure secrets
 
+Copy the example env file and fill in your tokens:
+
+```bash
+cp .env.example .env
+```
+
+```dotenv
+KAGGLE_USERNAME="your_kaggle_username"
+KAGGLE_API_TOKEN="your_kaggle_key"
+DAGSHUB_USER_TOKEN="your_dagshub_token"
+```
+
+### 3. Pull existing DVC artifacts (optional)
+
+```bash
 dvc pull
 ```
 
-After `dvc pull`, tracked data/model/report files are available locally.
-
-## Daily Workflow
-
-### 1) Reproduce training pipeline
+### 4. Run the training pipeline
 
 ```bash
+# Option A: via DVC (recommended — also versions outputs)
 dvc repro
+
+# Option B: via Makefile shortcut
+make train
+
+# Option C: run directly (skips DVC output tracking)
+.\.venv\Scripts\python.exe trainer.py
 ```
 
-This runs the training stage and updates `dvc.lock` when outputs change.
+Each run automatically logs to the DagsHub MLflow server.
 
-### 2) Check what changed
+### 5. View experiments
 
 ```bash
+make mlflow-ui
+# → Opens: https://dagshub.com/nouran-19/MLOps-practice.mlflow
+```
+
+Or navigate directly to the URL above.
+
+## Comparing Experiments
+
+### Switch Hydra configs to create different runs
+
+```bash
+# Run the baseline config
+dvc repro    # uses conf/pipeline/titanic_baseline.yaml by default
+
+# Run the alternative config
+.\.venv\Scripts\python.exe trainer.py pipeline=titanic_alt
+```
+
+Each config produces a separate MLflow run. On the DagsHub experiments page you can:
+
+1. **Select runs** → side-by-side parameter + metric comparison
+2. **Sort by metric** → find the best `val.roc_auc` or `val.f1`
+3. **Download artifacts** → grab the `.pkl` model directly from the run
+
+### What gets logged per run
+
+| Category | Examples | Where |
+|---|---|---|
+| **Parameters** | `training.test_size`, `models.random_forest.n_estimators`, ... | MLflow Params tab |
+| **CV Metrics** | `random_forest.cv.accuracy`, `logistic_regression.cv.f1`, ... | MLflow Metrics tab |
+| **Validation Metrics** | `val.accuracy`, `val.precision`, `val.recall`, `val.f1`, `val.roc_auc` | MLflow Metrics tab |
+| **Tags** | `best_model` | MLflow Tags |
+| **Artifacts** | `titanic_pipeline.pkl`, `training_report.json` | MLflow Artifacts tab |
+
+## DVC Pipeline (Reference)
+
+The DVC pipeline still handles reproducibility and artifact versioning. Two stages are defined in `dvc.yaml`:
+
+1. **`train_titanic`**: Runs `trainer.py` → outputs model + training report. Also logs to MLflow.
+2. **`score_titanic`**: Scores the trained model on training data → outputs downstream predictions + report.
+
+```bash
+# Reproduce the pipeline (reruns only changed stages)
+dvc repro
+
+# Check what's changed
 dvc status
-git status
-```
 
-### 3) Push artifacts to DagsHub
-
-```bash
+# Push artifacts to DagsHub remote
 dvc push
 ```
 
-### 4) Commit and push code metadata
+Pipeline DAG:
+
+```text
+raw Titanic CSVs
+    │
+    ▼
+train_titanic ──► MLflow (params, metrics, artifacts)
+    │
+    ▼
+models/titanic/titanic_pipeline.pkl
+    │
+    ▼
+score_titanic
+    │
+    ▼
+downstream report + predictions
+```
+
+## Daily Workflow
 
 ```bash
+# 1. Make changes to config/code
+# 2. Run pipeline (logs to MLflow automatically)
+dvc repro
+
+# 3. Compare runs on DagsHub
+make mlflow-ui
+
+# 4. Push artifacts + commit metadata
+dvc push
 git add dvc.yaml dvc.lock .dvc/config *.dvc .gitignore
-git commit -m "Update training artifacts and DVC metadata"
+git commit -m "Experiment: <what you changed>"
 git push
 ```
 
-## Verify Reproducibility (Lab Requirement)
-
-To prove setup works from scratch:
-
-1. Clone into a fresh folder.
-2. Run `uv sync`.
-3. Run `dvc pull`.
-4. Confirm model and report exist.
-
-```bash
-git clone https://github.com/nouran-19/MLOps-practice.git MLOps-practice2-verify
-cd MLOps-practice2-verify
-uv sync
-dvc pull
-```
-
-Expected files after pull:
-- `data/raw/titanic/train.csv`
-- `data/raw/titanic/test.csv`
-- `models/titanic/titanic_pipeline.pkl`
-- `reports/titanic/training_report.json`
-
-## Minimal Note on Hydra
-
-Hydra is still used internally for training configuration in `trainer.py` and `conf/`.
-For Lab 2 workflow, focus on DVC commands (`repro`, `push`, `pull`) and DagsHub remote sync. See lab 1 branch for more details
-
 ## Common Issues
 
-### `401 Unauthorized` on `dvc push`
-Cause:
-- Missing or invalid DagsHub token in local DVC config.
+### `dagshub.init()` fails with auth error
+**Cause**: Missing or invalid `DAGSHUB_USER_TOKEN` in `.env`.
 
-Fix:
-- Update local credentials for remote and retry push.
+**Fix**: Generate a new token at [DagsHub settings](https://dagshub.com/user/settings/tokens) and update `.env`.
+
+### MLflow run not appearing on DagsHub
+**Cause**: Running `trainer.py` directly without loading `.env` first.
+
+**Fix**: The `trainer.py` entry point loads `.env` automatically via `python-dotenv`. If you're calling `pipeline.py` from a different entry point, ensure `DAGSHUB_USER_TOKEN` is set in your environment.
+
+### `401 Unauthorized` on `dvc push`
+**Cause**: Missing or invalid DagsHub token in local DVC config.
+
+**Fix**: Update local credentials for the remote and retry:
+```bash
+dvc remote modify --local origin access_key_id <dagshub_token>
+dvc remote modify --local origin secret_access_key <dagshub_token>
+dvc push
+```
 
 ### Outputs tracked by Git instead of DVC
-Cause:
-- Artifact file was committed before being moved to DVC tracking.
+**Cause**: Artifact file was committed before being moved to DVC tracking.
 
-Fix:
+**Fix**:
 ```bash
 git rm --cached <artifact_file>
 git commit -m "Stop tracking artifact in Git"
-```
-Then rerun:
-```bash
 dvc commit <stage_name>
 dvc push
 ```
 
-### `dvc.lock` missing
-Cause:
-- Stage has not been committed/reproduced successfully.
+## Minimal Note on Hydra
 
-Fix:
+Hydra manages training configuration in `trainer.py` and `conf/`.
+Switch experiments by overriding the pipeline config:
+
 ```bash
-dvc repro
+# Default (titanic_baseline)
+.\.venv\Scripts\python.exe trainer.py
+
+# Alternative config
+.\.venv\Scripts\python.exe trainer.py pipeline=titanic_alt
 ```
-(or `dvc commit <stage_name>` if outputs already exist and should be attached).
+
+All Hydra parameters are automatically flattened and logged to MLflow — so the exact config is always traceable from any historical run.
 
 ## License
 

@@ -10,6 +10,7 @@ import zipfile
 from hydra.utils import instantiate
 import joblib
 from kaggle.api.kaggle_api_extended import KaggleApi
+import mlflow
 from omegaconf import DictConfig
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
@@ -19,6 +20,15 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+from src.mlflow_utils import (
+    init_dagshub_mlflow,
+    log_cv_metrics,
+    log_hydra_params,
+    log_model_artifact,
+    log_report_artifact,
+    log_validation_metrics,
+)
 
 TITLE_REPLACEMENTS = {
     "Mlle": "Miss",
@@ -216,48 +226,68 @@ def train_titanic_pipeline(cfg: DictConfig, logger) -> None:
     download_titanic_competition_data(cfg, logger)
     X, y = load_titanic_data(cfg)
 
-    X_train, X_valid, y_train, y_valid = train_test_split(
-        X,
-        y,
-        test_size=cfg.training.test_size,
-        random_state=cfg.training.random_state,
-        stratify=y,
-    )
+    # --- MLflow experiment tracking ----------------------------------------
+    init_dagshub_mlflow()
+    mlflow.set_experiment(cfg.experiment_name)
 
-    best_name, best_pipeline, cv_scores = evaluate_candidates(cfg, X_train, y_train, logger)
+    with mlflow.start_run(run_name=cfg.experiment_name):
+        # Log every Hydra config leaf as an MLflow parameter
+        log_hydra_params(cfg)
 
-    logger.info("Fitting the best pipeline on the training split")
-    best_pipeline.fit(X_train, y_train)
+        X_train, X_valid, y_train, y_valid = train_test_split(
+            X,
+            y,
+            test_size=cfg.training.test_size,
+            random_state=cfg.training.random_state,
+            stratify=y,
+        )
 
-    valid_predictions = best_pipeline.predict(X_valid)
-    valid_probabilities = best_pipeline.predict_proba(X_valid)[:, 1]
-    metrics = {
-        "accuracy": float(accuracy_score(y_valid, valid_predictions)),
-        "precision": float(precision_score(y_valid, valid_predictions)),
-        "recall": float(recall_score(y_valid, valid_predictions)),
-        "f1": float(f1_score(y_valid, valid_predictions)),
-        "roc_auc": float(roc_auc_score(y_valid, valid_probabilities)),
-    }
+        best_name, best_pipeline, cv_scores = evaluate_candidates(cfg, X_train, y_train, logger)
 
-    model_dir = Path(cfg.artifacts.model_dir)
-    report_dir = Path(cfg.artifacts.report_dir)
-    model_path = model_dir / cfg.artifacts.model_file
-    report_path = report_dir / cfg.artifacts.report_file
+        # Log cross-validation scores for every candidate
+        log_cv_metrics(cv_scores)
+        mlflow.set_tag("best_model", best_name)
 
-    model_dir.mkdir(parents=True, exist_ok=True)
-    report_dir.mkdir(parents=True, exist_ok=True)
-    joblib.dump(best_pipeline, model_path)
+        logger.info("Fitting the best pipeline on the training split")
+        best_pipeline.fit(X_train, y_train)
 
-    report = {
-        "dataset": f"kaggle/{cfg.data.competition_name}",
-        "config_name": cfg.experiment_name,
-        "best_model": best_name,
-        "cross_validation": cv_scores,
-        "validation_metrics": metrics,
-        "artifact_path": str(model_path),
-    }
-    with report_path.open("w", encoding="utf-8") as handle:
-        json.dump(report, handle, indent=4)
+        valid_predictions = best_pipeline.predict(X_valid)
+        valid_probabilities = best_pipeline.predict_proba(X_valid)[:, 1]
+        metrics = {
+            "accuracy": float(accuracy_score(y_valid, valid_predictions)),
+            "precision": float(precision_score(y_valid, valid_predictions)),
+            "recall": float(recall_score(y_valid, valid_predictions)),
+            "f1": float(f1_score(y_valid, valid_predictions)),
+            "roc_auc": float(roc_auc_score(y_valid, valid_probabilities)),
+        }
 
-    logger.info(f"Saved trained pipeline to {model_path}")
-    logger.info(f"Saved training report to {report_path}")
+        # Log final hold-out validation metrics
+        log_validation_metrics(metrics)
+
+        model_dir = Path(cfg.artifacts.model_dir)
+        report_dir = Path(cfg.artifacts.report_dir)
+        model_path = model_dir / cfg.artifacts.model_file
+        report_path = report_dir / cfg.artifacts.report_file
+
+        model_dir.mkdir(parents=True, exist_ok=True)
+        report_dir.mkdir(parents=True, exist_ok=True)
+        joblib.dump(best_pipeline, model_path)
+
+        report = {
+            "dataset": f"kaggle/{cfg.data.competition_name}",
+            "config_name": cfg.experiment_name,
+            "best_model": best_name,
+            "cross_validation": cv_scores,
+            "validation_metrics": metrics,
+            "artifact_path": str(model_path),
+        }
+        with report_path.open("w", encoding="utf-8") as handle:
+            json.dump(report, handle, indent=4)
+
+        # Attach model + report to the MLflow run
+        log_model_artifact(str(model_path))
+        log_report_artifact(str(report_path))
+
+        logger.info(f"Saved trained pipeline to {model_path}")
+        logger.info(f"Saved training report to {report_path}")
+        logger.info(f"MLflow run logged to experiment '{cfg.experiment_name}'")

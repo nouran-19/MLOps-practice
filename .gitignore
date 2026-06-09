@@ -213,3 +213,7 @@ __marimo__/
 /models/titanic/*.pkl
 /reports/titanic/*.json
 /outputs/
+im_plan.md
+.env.example
+.env.example
+*.example
