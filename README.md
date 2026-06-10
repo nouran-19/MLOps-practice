@@ -113,6 +113,7 @@ MLOps-practice2/
 │   ├── logger.py                     # Loguru-based logger
 │   └── training/                     # Evaluation & scoring modules
 ├── trainer.py                        # Entry point (Hydra + dotenv)
+├── dockerfile.mlflow                 # Docker image for MLflow inference server
 ├── dvc.yaml                          # DVC pipeline definition
 ├── dvc.lock                          # Locked stage dependency/output hashes
 ├── Makefile                          # Convenience targets (train, mlflow-ui)
@@ -308,6 +309,146 @@ Switch experiments by overriding the pipeline config:
 ```
 
 All Hydra parameters are automatically flattened and logged to MLflow — so the exact config is always traceable from any historical run.
+
+## Model Registry and Deployment
+
+### Creating the Inference Server Docker Image
+
+Using the **MLflow Model Registry**, an inference server can be deployed by building a Docker image that pulls the registered model from DagsHub and serves it via `mlflow models serve`.
+
+The Dockerfile is already provided at [dockerfile.mlflow](dockerfile.mlflow). Update the registry URI, model name, and model version placeholders to match your DagsHub registry entry. It:
+
+1. Uses the `uv`-enabled Python 3.12 slim image
+2. Installs project dependencies from the lockfile
+3. Serves the model on container start using:
+   ```
+   mlflow models serve -m models:/<MODEL_NAME>/<MODEL_VERSION> -p 5000 --no-conda
+   ```
+
+#### Build the Image
+
+```bash
+docker build -t mlflow-dagshub-server -f dockerfile.mlflow .
+```
+
+#### Run Locally
+
+Test the server locally before pushing. Pass your DagsHub credentials as environment variables:
+
+```bash
+docker run -p 5000:5000 \
+  -e MLFLOW_TRACKING_USERNAME="<your_dagshub_username>" \
+  -e MLFLOW_TRACKING_PASSWORD="<your_dagshub_token>" \
+  mlflow-dagshub-server
+```
+
+The inference endpoint will be available at `http://localhost:5000/invocations`.
+
+#### Push to DockerHub
+
+Once the server works locally, tag and push the image:
+
+```bash
+docker login
+# enter your DockerHub username and password
+
+# tag the image
+docker tag mlflow-dagshub-server:latest <your_dockerhub_username>/mlflow-dagshub-server:latest
+
+# push it
+docker push <your_dockerhub_username>/mlflow-dagshub-server:latest
+```
+
+### Deploy to Lightning AI ⚡
+
+With the image on DockerHub, deploy the inference server to [Lightning AI](https://lightning.ai/):
+
+1. **Create a new Lightning Studio** or open an existing one.
+2. **Pull the Docker image** from DockerHub inside the studio terminal:
+   ```bash
+   docker pull <your_dockerhub_username>/mlflow-dagshub-server:latest
+   ```
+3. **Run the container** with your DagsHub credentials:
+   ```bash
+   docker run -d -p 5000:5000 \
+     -e MLFLOW_TRACKING_USERNAME="<your_dagshub_username>" \
+     -e MLFLOW_TRACKING_PASSWORD="<your_dagshub_token>" \
+     <your_dockerhub_username>/mlflow-dagshub-server:latest
+   ```
+4. **Expose the port** — Lightning AI auto-generates a public URL for the forwarded port.
+5. **Verify** — navigate to the public URL and confirm the server is responding.
+
+---
+
+## Lab 5 — Invoking the Deployed Endpoint
+
+Once the inference server is running locally or on Lightning AI, you can send prediction requests to the `/invocations` endpoint.
+
+### Quick validation script
+
+A ready-made test script is included at [`test_endpoint.py`](test_endpoint.py):
+
+```bash
+# Against local Docker container
+python test_endpoint.py
+
+# Against Lightning AI (or any remote host)
+python test_endpoint.py http://<lightning-ai-public-url>
+```
+
+It sends two sample passengers and prints the predictions.
+
+### Using the service UI
+
+If you put the model behind a FastAPI wrapper or another gateway that exposes docs, open the server URL in your browser and navigate to:
+
+```
+http://<host>:<port>/docs
+```
+
+From the interactive Swagger UI you can:
+
+1. Expand the **POST `/invocations`** endpoint.
+2. Click **Try it out**.
+3. Paste a JSON payload and hit **Execute**.
+
+If the deployment only exposes the MLflow scoring server, skip the docs page and call `/invocations` directly.
+
+### Using `curl`
+
+Send a prediction request from the command line:
+
+```bash
+curl -X POST http://<host>:5000/invocations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "dataframe_split": {
+      "columns": ["Pclass", "Name", "Sex", "Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked"],
+      "data": [[3, "Braund, Mr. Owen Harris", "male", 22.0, 1, 0, "A/5 21171", 7.25, null, "S"]]
+    }
+  }'
+```
+
+> **Note**: The model's sklearn Pipeline includes `TitanicFeatureEngineer`, which derives features from `Name`, `Ticket`, and `Cabin`. All raw columns must be present in the request — even if some values are `null`.
+
+### Using Python `requests`
+
+```python
+import requests
+
+url = "http://<host>:5000/invocations"
+payload = {
+    "dataframe_split": {
+        "columns": ["Pclass", "Name", "Sex", "Age", "SibSp", "Parch", "Ticket", "Fare", "Cabin", "Embarked"],
+        "data": [[3, "Braund, Mr. Owen Harris", "male", 22.0, 1, 0, "A/5 21171", 7.25, None, "S"]],
+    }
+}
+
+response = requests.post(url, json=payload)
+print(response.json())
+```
+
+> **Tip**: Replace `<host>` with `localhost` for local testing, or with the Lightning AI public URL for the deployed server.
 
 ## License
 
